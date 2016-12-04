@@ -635,7 +635,7 @@ HTML
 				// Check if this stylesheet is a global one or not. If it's specific, we're going to add it
 				// to the body instead of the head. Then, our custom handler will append them to the head, checking
 				// if the stylesheet is already available
-				foreach (['global', $mybb->get_input['action']] as $pageAction) {
+				foreach (['global', $mybb->get_input('action')] as $pageAction) {
 					
 					foreach ($theme['stylesheets'][basename($_SERVER['PHP_SELF'])][$pageAction] as $pageSpecificStylesheet) {
 						
