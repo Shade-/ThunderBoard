@@ -637,7 +637,7 @@ HTML
 				// if the stylesheet is already available
 				foreach (['global', $mybb->get_input('action')] as $pageAction) {
 					
-					foreach ($theme['stylesheets'][basename($_SERVER['PHP_SELF'])][$pageAction] as $pageSpecificStylesheet) {
+					foreach ((array) $theme['stylesheets'][basename($_SERVER['PHP_SELF'])][$pageAction] as $pageSpecificStylesheet) {
 						
 						if ($pageSpecificStylesheet == $plainLink) {
 							$specific = true;
