@@ -85,8 +85,8 @@ function thunderboard_install()
 			'value' => 1
 		],
 		'thunderboard_spinner_delay' => [
-			'title' => $lang->thunderboard_settings_thunderboard_spinner_delay,
-			'description' => $lang->thunderboard_settings_thunderboard_spinner_delay_desc,
+			'title' => $lang->thunderboard_settings_spinner_delay,
+			'description' => $lang->thunderboard_settings_spinner_delay_desc,
 			'optionscode' => 'text',
 			'value' => '0'
 		],
