@@ -125,78 +125,74 @@ class ThunderBoard
 		
 		global $mybb;
 		
-		if ($mybb->settings['thunderboard_automatic_variable_cleanup']) {
-		
-			foreach ($this->dom->getElementsByTagName("script") as $script) {
+		foreach ($this->dom->getElementsByTagName("script") as $script) {
+			
+			$content = trim($script->nodeValue);
+			
+			if ($content) {
+			
+				$this->counter++;
+						
+				require_once MYBB_ROOT . 'inc/plugins/ThunderBoard/jtokenizer.php';
 				
-				$content = trim($script->nodeValue);
+				// Rip this JS code into tiny little pieces and analyze them one by one
+				// This approach is more precise than using regexes to exclude parts of the script
+				$tokens = j_token_get_all($content);
 				
-				if ($content) {
+				$graphBracketsLevel = $o = 0;
+				$protected = false;
+				$tempVariables = $deletionQueue = [];
 				
-					$this->counter++;
-							
-					require_once MYBB_ROOT . 'inc/plugins/ThunderBoard/jtokenizer.php';
+				foreach ($tokens as $token) {
 					
-					// Rip this JS code into tiny little pieces and analyze them one by one
-					// This approach is more precise than using regexes to exclude parts of the script
-					$tokens = j_token_get_all($content);
-					
-					$graphBracketsLevel = $o = 0;
-					$protected = false;
-					$tempVariables = $deletionQueue = [];
-					
-					foreach ($tokens as $token) {
-						
-						// Go up 1 level
-						if ($token[1] == '{') {
-							$graphBracketsLevel++;
-						}
-						
-						$tokenName = j_token_name($token[0]);
-						
-						// Stay in the "top" level (which equals to the "global" scope)
-						if ($graphBracketsLevel > 0 and !$protected) {
-							continue;
-						}
-						
-						// Begin gathering this variable value
-						if ($tokenName == 'J_VAR') {
-							$protected = true;
-							$o++;
-						}
-						
-						// Add this piece to the variable value
-						if ($protected) {
-							$tempVariables[$o][] = $token[1];
-						}
-						
-						// This variable is over
-						if ($tokenName == ';') {
-							$protected = false;
-						}
-						
-						// Go down 1 level
-						if ($token[1] == '}') {
-							$graphBracketsLevel--;
-						}
-						
+					// Go up 1 level
+					if ($token[1] == '{') {
+						$graphBracketsLevel++;
 					}
 					
-					// Rebuild the variables we need to extrapolate
-					foreach ($tempVariables as $variable) {
-						$this->scripts[$this->counter]['globalScoped'][] = implode('', $variable);
+					$tokenName = j_token_name($token[0]);
+					
+					// Stay in the "top" level (which equals to the "global" scope)
+					if ($graphBracketsLevel > 0 and !$protected) {
+						continue;
 					}
 					
-					// Delete variables
-					$this->originalContent = str_replace($this->scripts[$this->counter]['globalScoped'], '', $this->originalContent);
+					// Begin gathering this variable value
+					if ($tokenName == 'J_VAR') {
+						$protected = true;
+						$o++;
+					}
+					
+					// Add this piece to the variable value
+					if ($protected) {
+						$tempVariables[$o][] = $token[1];
+					}
+					
+					// This variable is over
+					if ($tokenName == ';') {
+						$protected = false;
+					}
+					
+					// Go down 1 level
+					if ($token[1] == '}') {
+						$graphBracketsLevel--;
+					}
 					
 				}
 				
-				// Replace var with window to globalize them
-				if ($this->scripts[$this->counter]['globalScoped']) {
-					$this->scripts[$this->counter]['globalScoped'] = str_replace('var ', 'window.', $this->scripts[$this->counter]['globalScoped']);
+				// Rebuild the variables we need to extrapolate
+				foreach ($tempVariables as $variable) {
+					$this->scripts[$this->counter]['globalScoped'][] = implode('', $variable);
 				}
 				
+				// Delete variables
+				$this->originalContent = str_replace($this->scripts[$this->counter]['globalScoped'], '', $this->originalContent);
+				
+			}
+			
+			// Replace var with window to globalize them
+			if ($this->scripts[$this->counter]['globalScoped']) {
+				$this->scripts[$this->counter]['globalScoped'] = str_replace('var ', 'window.', $this->scripts[$this->counter]['globalScoped']);
 			}
 			
 		}
