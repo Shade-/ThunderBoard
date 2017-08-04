@@ -311,7 +311,7 @@ function pjax(options) {
     })
     
 	if (typeof options.replacementHandler === "function")
-		options.replacementHandler(context, container.contents, options)
+		options.replacementHandler(context, container.contents, options, url)
 	else
 		context.html(container.contents)
 
@@ -329,14 +329,16 @@ function pjax(options) {
 
     var scrollTo = options.scrollTo
 
-    // Ensure browser scrolls to the element referenced by the URL anchor
+    /*// Ensure browser scrolls to the element referenced by the URL anchor
     if (hash) {
       var name = decodeURIComponent(hash.slice(1))
       var target = document.getElementById(name) || document.getElementsByName(name)[0]
       if (target) scrollTo = $(target).offset().top
     }
 
-    if (typeof scrollTo == 'number') $(window).scrollTop(scrollTo)
+    if (typeof scrollTo == 'number') {
+	    $(window).scrollTop(scrollTo)
+	}*/
 
     fire('pjax:success', [data, status, xhr, options])
   }

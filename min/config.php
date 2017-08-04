@@ -6,6 +6,13 @@
  * @package Minify
  */
 
+
+/**
+ * Enable the static serving feature
+ */
+$min_enableStatic = true;
+
+
 /**
  * Allow use of the Minify URI Builder app. Only set this to true while you need it.
  */
@@ -26,14 +33,10 @@ $min_builderPassword = 'admin';
 
 
 /**
- * Set to true to log messages to FirePHP (Firefox Firebug addon).
+ * Set to true to log messages to FirePHP (Firefox Firebug addon) and PHP's error_log
  * Set to false for no error logging (Minify may be slightly faster).
- * @link http://www.firephp.org/
- *
- * If you want to use a custom error logger, set this to your logger
- * instance. Your object should have a method log(string $message).
  */
-$min_errorLogger = false;
+$min_errorLogger = true;
 
 
 /**
@@ -55,15 +58,16 @@ $min_allowDebugFlag = false;
  * For best performance, specify your temp directory here. Otherwise Minify
  * will have to load extra code to guess. Some examples below:
  */
-//$min_cachePath = 'c:\\WINDOWS\\Temp';
 $min_cachePath = dirname(dirname(__FILE__)) . '/cache/thunderboard';
+//$min_cachePath = 'c:\\WINDOWS\\Temp';
+//$min_cachePath = '/tmp';
 //$min_cachePath = preg_replace('/^\\d+;/', '', session_save_path());
+
 
 /**
  * To use APC/Memcache/ZendPlatform for cache storage, require the class and
  * set $min_cachePath to an instance. Example below:
  */
-//require dirname(__FILE__) . '/lib/Minify/Cache/APC.php';
 //$min_cachePath = new Minify_Cache_APC();
 
 
@@ -78,6 +82,7 @@ $min_cachePath = dirname(dirname(__FILE__)) . '/cache/thunderboard';
  * second line. The third line might work on some Apache servers.
  */
 $min_documentRoot = '';
+//$min_documentRoot = dirname(__DIR__);
 $min_documentRoot = substr(__FILE__, 0, -15);
 //$min_documentRoot = $_SERVER['SUBDOMAIN_DOCUMENT_ROOT'];
 
@@ -113,9 +118,9 @@ $min_serveOptions['maxAge'] = 1800;
 
 
 /**
- * To use CSSmin (Túbal Martín's port of the YUI CSS compressor), uncomment the following line:
+ * To use the CSS compressor that shipped with 2.x, uncomment the following line:
  */
-//$min_serveOptions['minifiers']['text/css'] = array('Minify_CSSmin', 'minify');
+//$min_serveOptions['minifiers'][Minify::TYPE_CSS] = array('Minify_CSS', 'minify');
 
 
 /**
@@ -187,11 +192,10 @@ $min_uploaderHoursBehind = 0;
 
 
 /**
- * Path to Minify's lib folder. If you happen to move it, change 
- * this accordingly.
+ * Advanced: you can replace some of the PHP classes Minify uses to serve requests.
+ * To do this, assign a callable to one of the elements of the $min_factories array.
+ *
+ * You can see the default implementations (and what gets passed in) in index.php.
  */
-$min_libPath = dirname(__FILE__) . '/lib';
-
-
-// try to disable output_compression (may not have an effect)
-ini_set('zlib.output_compression', '0');
+//$min_factories['minify'] = ... a callable accepting a Minify\App object
+//$min_factories['controller'] = ... a callable accepting a Minify\App object

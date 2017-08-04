@@ -13,7 +13,8 @@
  *
  * @todo can use a stream wrapper to unit test this?
  */
-class Minify_JS_ClosureCompiler {
+class Minify_JS_ClosureCompiler
+{
 
     /**
      * @var string The option key for the maximum POST byte size
@@ -68,7 +69,7 @@ class Minify_JS_ClosureCompiler {
     /**
      * @var callable Function to minify JS if service fails. Default is JSMin
      */
-    protected $fallbackMinifier = array('JSMin', 'minify');
+    protected $fallbackMinifier = array('JSMin\\JSMin', 'minify');
 
     /**
      * Minify JavaScript code via HTTP request to a Closure Compiler API
@@ -81,6 +82,7 @@ class Minify_JS_ClosureCompiler {
     public static function minify($js, array $options = array())
     {
         $obj = new self($options);
+
         return $obj->min($js);
     }
 
@@ -227,4 +229,6 @@ class Minify_JS_ClosureCompiler {
     }
 }
 
-class Minify_JS_ClosureCompiler_Exception extends Exception {}
+class Minify_JS_ClosureCompiler_Exception extends Exception
+{
+}

@@ -7,7 +7,7 @@
  * @package ThunderBoard
  * @author  Shade <legend_k@live.it>
  * @license MIT
- * @version beta 3
+ * @version beta 5
  */
  
 if (!defined('IN_MYBB')) {
@@ -18,6 +18,16 @@ if (!defined("PLUGINLIBRARY")) {
 	define("PLUGINLIBRARY", MYBB_ROOT."inc/plugins/pluginlibrary.php");
 }
 
+$GLOBALS['reload_rules'] = [
+	'general' => 'MyBB.init()',
+	'inline_edit' => 'inlineEditor.init()',
+	'inline_moderation' => 'inlineModeration.init()',
+	'post' => 'Post.init()',
+	'rating' => 'Rating.init()',
+	'report' => 'Report.init()',
+	'thread' => 'Thread.init()'
+];
+
 function thunderboard_info()
 {
 	return [
@@ -25,7 +35,7 @@ function thunderboard_info()
 		'description'   =>  'Light-speed page loads for your MyBB forum.',
 		'website'       =>  'http://www.mybboost.com',
 		'author'        =>  'Shade',
-		'version'       =>  'beta 3',
+		'version'       =>  'beta 5',
 		'compatibility' =>  '18*',
 	];
 }
@@ -44,7 +54,7 @@ function thunderboard_is_installed()
 
 function thunderboard_install()
 {
-	global $mybb, $cache, $lang, $PL;
+	global $mybb, $cache, $lang, $PL, $db, $reload_rules;
 	
 	$lang->load('thunderboard');
 	
@@ -66,7 +76,8 @@ function thunderboard_install()
 		'use_minifier' => [
 			'title' => $lang->thunderboard_settings_use_minifier,
 			'description' => $lang->thunderboard_settings_use_minifier_desc,
-			'value' => 1
+			'optionscode' => "checkbox\nstylesheets=Stylesheets\nscripts=Scripts",
+			'value' => 'stylesheets,scripts'
 		],
 		'use_image_lazy_loader' => [
 			'title' => $lang->thunderboard_settings_use_image_lazy_loader,
@@ -76,26 +87,41 @@ function thunderboard_install()
 		'usergroups_allowed' => [
 			'title' => $lang->thunderboard_settings_usergroups_allowed,
 			'description' => $lang->thunderboard_settings_usergroups_allowed_desc,
-			'optionscode' => 'text',
-			'value' => ''
+			'optionscode' => 'groupselect',
+			'value' => -1
 		],
-		'automatic_variable_cleanup' => [
-			'title' => $lang->thunderboard_settings_automatic_variable_cleanup,
-			'description' => $lang->thunderboard_settings_automatic_variable_cleanup_desc,
+		'merge_stylesheets' => [
+			'title' => $lang->thunderboard_settings_merge_stylesheets,
+			'description' => $lang->thunderboard_settings_merge_stylesheets_desc,
 			'value' => 1
-		],
-		'thunderboard_spinner_delay' => [
-			'title' => $lang->thunderboard_settings_spinner_delay,
-			'description' => $lang->thunderboard_settings_spinner_delay_desc,
-			'optionscode' => 'text',
-			'value' => '0'
-		],
+		]
 	]);
 	
-	// Add stylesheets
-	//$stylesheet = file_get_contents(dirname(__FILE__) . '/ThunderBoard/stylesheets/nprogress.css');
+	if (!$db->table_exists('thunderplates')) {
+		
+		$collation = $db->build_create_table_collation();
+		
+		$db->write_query("CREATE TABLE " . TABLE_PREFIX . "thunderplates (
+			tid int unsigned NOT NULL auto_increment,
+			title varchar(120) NOT NULL default '',
+			template text NOT NULL,
+			sid smallint NOT NULL default '0',
+			KEY sid (sid, title),
+			PRIMARY KEY (tid)
+        ) ENGINE=MyISAM{$collation};");
+		
+	}
 	
-	//$PL->stylesheet('nprogress.css', $stylesheet);
+	require_once MYBB_ROOT . 'inc/plugins/ThunderBoard/class_core.php';
+	$thunderboard->build_thunderplates();
+	
+	// Add stylesheets
+	$stylesheet = file_get_contents(dirname(__FILE__) . '/ThunderBoard/stylesheets/app-loading.css');
+	
+	$PL->stylesheet('app-loading.css', $stylesheet);
+	
+	// Add reload rules
+	$PL->cache_update('thunderboard_reload_scripts', $reload_rules);
 	
 	// Add the plugin to cache
     $info = thunderboard_info();
@@ -109,7 +135,7 @@ function thunderboard_install()
 
 function thunderboard_uninstall()
 {
-	global $cache, $PL;
+	global $cache, $PL, $db;
 	
 	$PL or require_once PLUGINLIBRARY;
         
@@ -117,7 +143,13 @@ function thunderboard_uninstall()
     $PL->settings_delete('thunderboard');
     
     // Remove stylesheets
-	//$PL->stylesheet_delete('nprogress');
+	$PL->stylesheet_delete('app-loading');
+	
+	// Remove caches
+	$PL->cache_delete('thunderboard_reload_scripts');
+	$PL->cache_delete('thunderboard_templates');
+	
+	$db->drop_table('thunderplates');
 	
 	// Remove the plugin from cache
 	$info = thunderboard_info();
@@ -127,677 +159,404 @@ function thunderboard_uninstall()
 }
 
 $plugins->add_hook('pre_output_page', 'thunderboard_replace', 1000);
+$plugins->add_hook('global_start', 'thunderboard_alter_templates_object', 1000);
+$plugins->add_hook('admin_style_templates_edit_template_commit', 'thunderboard_edit_template', 1);
 
 if (defined("IN_ADMINCP")) {
 
-	$plugins->add_hook("admin_config_settings_change", "thunderboard_settings_saver");
-	$plugins->add_hook("admin_formcontainer_output_row", "thunderboard_settings_replacer");
+	$plugins->add_hook("admin_page_output_header", "thunderboard_update");
+	$plugins->add_hook("admin_config_menu", "thunderboard_admin_config_menu");
+	$plugins->add_hook("admin_config_action_handler", "thunderboard_admin_config_action_handler");
+	
+}
+
+function thunderboard_update()
+{
+	global $mybb, $cache, $lang, $reload_rules;
+	
+	$lang->load('thunderboard');
+	
+	$shade_plugins = $cache->read('shade_plugins');
+	$info = thunderboard_info();
+	
+	$old_version = (float) str_replace('beta ', '0.', $shade_plugins[$info['name']]['version']);
+	$new_version = (float) str_replace('beta ', '0.', $info['version']);
+	
+	if (version_compare($old_version, $new_version, "<") and !$mybb->input['update']) {
+		return flash_message($lang->thunderboard_error_need_to_update, "error");
+	}
+	
+	if ($mybb->input['update'] == 'thunderboard') {
+		
+		$new_settings = $drop_settings = [];
+		
+		if (version_compare($old_version, '0.5', "<")) {
+			
+			global $PL;
+			
+			$PL or require_once PLUGINLIBRARY;
+			
+			$PL->cache_update('thunderboard_reload_scripts', $reload_rules);
+			
+			$drop_settings[] = 'thunderboard_automatic_variable_cleanup';
+			$drop_settings[] = 'thunderboard_versioning';
+			
+		}
+		
+		if ($new_settings) {
+			$db->insert_query_multiple('settings', $new_settings);
+		}
+		
+		if ($drop_settings) {
+			$db->delete_query('settings', "name IN ('thunderboard_". implode("','thunderboard_", $drop_settings) ."')");
+		}
+		
+		rebuild_settings();
+		
+		$shade_plugins[$info['name']]['version'] = $info['version'];
+		
+		$cache->update('shade_plugins', $shade_plugins);
+		
+		flash_message($lang->sprintf($lang->thunderboard_success_updated, $shade_plugins[$info['name']]['version'], $info['version']), "success");
+		admin_redirect($_SERVER['HTTP_REFERER']);
+		
+	}
+}
+
+function thunderboard_edit_template()
+{
+	global $mybb, $sid, $template, $db;
+	
+	require_once MYBB_ROOT . 'inc/plugins/ThunderBoard/class_core.php';
+	
+	$content = [
+		'title' => $template['title'],
+		'sid' => $sid,
+		'template' => rtrim($mybb->input['template'])
+	];
+						
+	$globalScoped = [];
+	
+	if ($content['template']) {
+	
+		$thunderboard->load_content($content['template']);
+		
+		if ($thunderboard->process_global_variables()) {
+		
+			if ($thunderboard->scripts) {
+				
+				foreach ($thunderboard->scripts as $script) {
+					
+					if (is_array($script['globalScoped']) and $script['globalScoped']) {
+						$globalScoped = array_merge($globalScoped, $script['globalScoped']);
+					}
+					
+				}
+				
+			}
+			
+		}
+		
+		if ($thunderboard->originalContent) {
+			$content['template'] = $thunderboard->originalContent;
+		}
+		
+		if ($globalScoped) {
+			$content['template'] .= "\n<script type='text/javascript' data-global='true'>\n" . implode("\n", $globalScoped) . "\n</script>";
+		}
+		
+		if ($content['template']) {
+			$content['template'] = $db->escape_string($content['template']);
+		}
+		
+	}
+	
+	$query = $db->simple_select('thunderplates', 'tid', "title='" . $db->escape_string($template['title']) . "' AND (sid = '-2' OR sid = '{$sid}')", array('order_by' => 'sid', 'order_dir' => 'desc', 'limit' => 1));
+	$tid = $db->fetch_field($query, "tid");
+	
+	// Decide whether to update or insert this template
+	if ($sid > 0) {
+		
+		$query = $db->simple_select('thunderplates', 'sid', "title='" . $db->escape_string($template['title']) . "' AND (sid = '-2' OR sid = '{$sid}' OR sid='{$template['sid']}')", array('order_by' => 'sid', 'order_dir' => 'desc'));
+		$existing_sid = $db->fetch_field($query, 'sid');
+		$existing_rows = $db->num_rows($query);
+		
+		if (($existing_sid == -2 and $existing_rows == 1) or $existing_rows == 0) {
+			return $db->insert_query('thunderplates', $content);
+		}
+		else {
+			return $db->update_query('thunderplates', $content, "tid = '{$tid}' AND sid != '-2'");
+		}
+		
+	}
+	else {
+		return $db->update_query('thunderplates', $content, "tid = '{$tid}' AND sid != '-2'");
+	}
+	
+}
+
+function thunderboard_alter_templates_object()
+{
+	global $templates;
+	
+	control_object($templates, '
+function cache($templates)
+{
+	global $theme, $db;
+	
+	$names = explode(",", $templates);
+	
+	$sql = "";
+	
+	foreach ($names as $name) {
+		
+		if (isset($this->cache[$name])) {
+			continue;
+		}
+		
+		$sql .= " ,\'".trim($name)."\'";
+		
+	}
+
+	$query = $db->simple_select("thunderplates", "title,template", "title IN (\'\'$sql) AND sid IN (\'-2\',\'-1\',\'".$theme[\'templateset\']."\')", array(\'order_by\' => \'sid\', \'order_dir\' => \'asc\'));
+	while ($template = $db->fetch_array($query)) {
+		$this->cache[$template[\'title\']] = $template[\'template\'];
+	}
+	
+	return true;
+}
+
+');
 	
 }
 
 function thunderboard_replace(&$contents)
 {
-	global $mybb;
+	global $mybb, $cache;
 	
 	if ($mybb->input['disable'] == 'thunderboard') {
 		return false;
 	}
 	
 	// Restrict to user in certain usergroups
-	if (!in_array($mybb->user['usergroup'], explode(',', (string) $mybb->settings['thunderboard_usergroups_allowed']))
-		and $mybb->settings['thunderboard_usergroups_allowed']) {
+	if (!$mybb->settings['thunderboard_usergroups_allowed'] or ($mybb->settings['thunderboard_usergroups_allowed'] != -1 and !in_array($mybb->user['usergroup'], (array) explode(',', (string) $mybb->settings['thunderboard_usergroups_allowed'])))) {
 		return false;
 	}
 	
-	if ($mybb->settings['thunderboard_use_pjax']) {
-		
-		require_once MYBB_ROOT . 'inc/plugins/ThunderBoard/Turbo.php';
-		$turbo = new Turbo\Turbo;
-		
-	}
+	$protected = [];
 	
-	// Remove HTML comments inside scripts (DOMDocument returns wrong values otherwise)
-	$contents = preg_replace('#(<script[^<]*?)<!--#is', '$1', $contents);
-		
-	// Begin!
-	$doc = new \DOMDocument;
+	$minifyResources = array_flip((array) explode(',', $mybb->settings['thunderboard_use_minifier']));
+	$minifyResources = array_fill_keys(array_keys($minifyResources), 1);
 	
-	// Tell libxml NOT to pass warnings/errors caused by malformed HTML to PHP (runs shutdown functions properly)
-	libxml_use_internal_errors(true);
+	require_once MYBB_ROOT . 'inc/plugins/ThunderBoard/class_core.php';
 	
-	$doc->loadHTML($contents);
+	$dynamic = $thunderboard->is_pjax();
 	
-	libxml_clear_errors();
-		
-	$scripts = $inline_scripts = $globalStylesheets = $globalScopedVariables = $scripts_to_reload = $extra_scripts = [];
-	$i = 1;
+	$thunderboard->load_content($contents);
 	
-	// Instantiate the duplicates check array
-	$scripts[] = [
-		'inline' => <<<HTML
-		
-(function() {
+	$thunderboard->load_scripts([
+		<<<HTML
+	
+// Remove all attached handlers on body
+$('body').off();
 
-	if (typeof window.thunderboard_loaded === 'undefined') {
-		window.thunderboard_loaded = [];
-	}
-	
-	// Remove all attached handlers on body and our custom ones on document
-	$('body').off();
-	$(document).off('.thunderboard');
-	
-	// Dummy replacement for document.write, disables document.write(). This needs a workaround
-	var originalWrite = document.write;
-	document.write = function() { return false };
-
-})();
+var originalWrite = document.write;
+document.write = function() { return false }; // Dummy replacement, disables document.write(). This needs a workaround
 	
 HTML
-	];
+	], 'inline', false);
 	
-	// Scripts to reload in case they are found
-	$scripts_to_check_reload = ['MyBB' => 'general', 'inlineEditor' => 'inline_edit', 'inlineModeration' => 'inline_moderation', 'Post', 'Rating', 'Report', 'Thread'];
-		
-	$shade = ($mybb->user['uid'] == 1);
-	
-	// Process scripts
-	foreach ($doc->getElementsByTagName("script") as $script) {
-		
-		$src = $script->getAttribute('src');
-		if ($src) {
-			
-			// Should be reloaded?
-			foreach ($scripts_to_check_reload as $function => $string) {
-				
-				if (stripos($src, $string) !== false) {
-					
-					$scripts_to_reload[$function] = $string;
-					
-					break;
-					
-				}
-				
-			}
-			
-			// Add this script to our list
-			$scripts[$i]['external'] = str_replace($mybb->settings['bburl'] . '/', '', strtok($src, '?'));
-			
-		}
-		
-		$content = $script->nodeValue;
-		
-		if (trim($content)) {
-			
-			if ($mybb->settings['thunderboard_automatic_variable_cleanup']) {
-					
-				require_once 'ThunderBoard/jtokenizer.php';
-				
-				// Rip this JS code into tiny little pieces and analyze them one by one
-				// This approach is more precise than using regexes to exclude parts of the script
-				$tokens = j_token_get_all($content);
-				
-				$graphBracketsLevel = $o = 0;
-				$protected = false;
-				$tempVariables = $deletionQueue = [];
-				
-				foreach ($tokens as $token) {
-					
-					// Go up 1 level
-					if ($token[1] == '{') {
-						$graphBracketsLevel++;
-					}
-					
-					$tokenName = j_token_name($token[0]);
-					
-					// Stay in the "top" level (which equals to the "global" scope)
-					if ($graphBracketsLevel > 0 and !$protected) {
-						continue;
-					}
-					
-					// Begin gathering this variable value
-					if ($tokenName == 'J_VAR') {
-						$protected = true;
-						$o++;
-					}
-					
-					// Add this piece to the variable value
-					if ($protected) {
-						$tempVariables[$o][] = $token[1];
-					}
-					
-					// This variable is over
-					if ($tokenName == ';') {
-						$protected = false;
-					}
-					
-					// Go down 1 level
-					if ($token[1] == '}') {
-						$graphBracketsLevel--;
-					}
-					
-				}
-				
-				// Rebuild the variables we need to extrapolate
-				foreach ($tempVariables as $variable) {
-					$globalScopedVariables[] = $deletionQueue[] = 'window.' . implode('', $variable);
-				}
-				
-				// Delete variables
-				$content = str_replace($deletionQueue, '', $content);
-			
-			}
-			
-			if ($content) {
-				$scripts[$i]['inline'] = $content;
-			}
-			
-		}
-		
-		$scripts_to_remove[] = $script;
-		
-		$i++;
-		
-	}
-	
-	// Remove scripts from the DOM
-	foreach ($scripts_to_remove as $script) {
-		$script->parentNode->removeChild($script);
-	}
+	$thunderboard->process_scripts();
+	$thunderboard->process_images();
+	$thunderboard->process_metas();
+	$thunderboard->process_stylesheets();
+	$thunderboard->load_scripts(['jscripts/pjax.js', 'jscripts/app-loading.js', 'jscripts/thunderboard.js']);
 	
 	$pjax_timeout = ($mybb->settings['thunderboard_pjax_timeout']) ? (int) $mybb->settings['thunderboard_pjax_timeout'] : 4000;
 	
-	// Add PJAX and Spin.js
+	// Add PJAX and App-loading.js
 	if ($mybb->settings['thunderboard_use_pjax']) {
-		
-		$scripts[] = [
-			'external' => 'jscripts/pjax.js'
-		];
-		$scripts[] =[ 
-			'external' => 'jscripts/spin.js'
-		];
-		
-		//if (!$shade) {
-			
-		$delay = ($mybb->settings['thunderboard_spinner_delay']) ? (int) $mybb->settings['thunderboard_spinner_delay'] : 0;
-		
-		// Might be customizable in the future
-		$loading_bar = <<<HTML
-	
-	// Add spinner
-	$(document).one('pjax:send', function() {
-		
-		var timeout = setTimeout(function() {
-						
-			if (thunderboardFinished == true) {
-				return clearTimeout(timeout);
-			}
-		
-			var target = $('#content');
-			var win = $(window);
-			var headerHeight = $('#header').outerHeight();
-			var footerHeight = $('#footer').outerHeight();
-			var paddingPlusMargin = (target.outerHeight(true) - target.outerHeight()) + (target.innerHeight() - target.height());
-			
-			// Empty the target content and set the height to stretch to full height of the viewport
-			target.empty().css({
-				'min-height': win.height() - headerHeight - footerHeight - paddingPlusMargin,
-				'position': 'relative'
-			});
-			
-			// Wipe out other elements added to the body, but do not touch 1) the container 2) eventual scripts
-			$('body > *:not(#container):not(script)').remove();
-			
-			// Always scroll to top (fixes mobile issues)
-			window.scroll(0,0);
-			
-			// Trigger the spin, hiding eventual residues from the last page call
-			target.spin(false);
-			target.spin('small');
-		
-		}, {$delay});
-		
-	});
-	
-	$(document).one('pjax:end', function() {
-		
-		// Fix for modals
-		$('body').css('overflow', 'visible');
-		
-	});
-	
-HTML;
-		/*}
-		else {
-			$scripts[] =[ 
-				'external' => 'jscripts/nprogress.js'
-			];
-			$loading_bar = <<<HTML
-	
-	// Add fancy loading bar
-	NProgress.configure({
-		easing: 'ease',
-		showSpinner: false
-	});
-	
-	$(document).on('pjax:send', function() {
-		
-		NProgress.done();
-		NProgress.start();
-		
-	});
-	
-	$(document).on('pjax:end', function() {
-		
-		NProgress.done();
-		
-		// Fix for modals
-		$('body').css('overflow', 'visible');
-		
-	});
-	
-HTML;
-		}*/
-		$scripts[] = [
-			'inline' => <<<HTML
-			
-(function() {
-	
-	// AJAXify the whole site
-	if ($.support.pjax) {
-		
-		$(document).on('click.thunderboard', 'a:not([data-skip]):not([href*="attachment.php"])', function(event) {
-			
-			thunderboardFinished = false;
-			
-			$.pjax.click(event, {
-				timeout: {$pjax_timeout},
-				container: 'body',
-				// Create a custom replace handler to accomodate eventual page-specific stylesheets
-				replacementHandler: function(context, content) {
-					
-					var stylesheets = [];
-					var indexes = [];
-					
-					// Gather the stylesheets on the new page
-					$.each(content, function(k, v) {
-						
-						var clone = $(v).clone();
-						var href = clone.attr('href');
-						
-						if (v.rel == 'stylesheet') {
-						
-							if ($('head').find('link[rel*="style"][href="' + href + '"]').length == 0) {
-								stylesheets.push(clone);
-							}
-						
-							indexes.push(k);
-							
-						}
-						
-					});
-						
-					// Remove all the stylesheets from the body (in reverse order, because otherwise we are
-					// removing other nodes
-					if (indexes.length) {
-						
-						var i = indexes.length;
-						
-						while (i--) {
-							content.splice(indexes[i], 1);
-						}
-												
-					}
-					
-					if (stylesheets.length) {
-						
-						// Append them at once
-						$('head').append(stylesheets);
-						
-						var counter = stylesheets.length;
-						
-						// Add a "load" handler to all of them
-						$.each(stylesheets, function(k, v) {
-							
-							v.one('load', function() {
-								
-								counter--;
-		
-								thunderboardFinished = true;
-								
-								// If there are no more stylesheets remaining, replace the html
-								if (counter == 0) {
-									return context.html(content);
-								}
-								
-							});
-							
-						});
-						
-					}
-					else {
-		
-						thunderboardFinished = true;
-						
-						return context.html(content);
-						
-					}
-					
-				}
-			});
-			
-		});
-	
-	}
-	
-	// AJAXify forms
-	$(document).on('submit.thunderboard', 'form:not([data-skip])', function(event) {
-		$.pjax.submit(event, 'body');
-	});
-	
-	// Add hidden inputs to forms upon submitting
-	$(document).on('click.thunderboard', 'form:not([data-skip]) input[type="submit"]', function(event) {
-		$(this).closest('form').append($(this).clone().attr('type', 'hidden'));
-	});
-	
-	{$loading_bar}
-	
-	// Handle errors as if they were a normal page
-	$(document).on('pjax:error', function(event, xhr, textStatus, errorThrown, options) {
-	    options.success(xhr.responseText, textStatus, xhr);
-	    return false;
-	});
-	
-})();
-		
+
+		$thunderboard->load_scripts([
+			<<<HTML
+	ThunderBoard.timeout = {$pjax_timeout};
+	ThunderBoard.init();
 HTML
-		];
-	
-	}
-	
-	// Process images
-	if ($mybb->settings['thunderboard_use_image_lazy_loader']) {
-	
-		$i = 0;
-		$imgs = $doc->getElementsByTagName('img');
+		], 'inline');
 		
-		for ($i = $imgs->length; $i > 0; $i--){
-			
-		    $img = $doc->getElementsByTagName('img')->item($i - 1);
-		   
-			$div = $doc->createElement('div');
-			
-			$src = $img->getAttribute('src');
-			
-			$div->setAttribute('data-lazy-load-image', $src);
-			
-			$params = ['class', 'id', 'title'];
-			
-			foreach ($params as $param) {
+		if ($mybb->input['thunderboard'] != 'debug') {
+		
+			// Tidy up the DOM
+			$thunderboard->load_scripts([
+				<<<HTML
+		
+		$(document).ready(function() {
+			return $('[data-tb-loader]').remove();
+		});
 				
-				$attr = $img->getAttribute($param);
-				
-				if ($attr != 'undefined') {
-					$div->setAttribute($param, $attr);
-				}
-				
-			}
-			
-			// Replace the image with a plain <span>
-			$img->parentNode->replaceChild($div, $img);
-		    
+HTML
+			], 'inline', false);
+		
 		}
 	
-		$scripts[] = [
-			'inline' => <<<HTML
-			
-(function () {
-	
-	var thunderboard_images = $("[data-lazy-load-image]");
-	
-    if (thunderboard_images.length > 0) {
-	    
-        thunderboard_images.each(function (index, element) {
-	        
-            var img = new Image();
-            
-            img.src = $(element).data("lazy-load-image");
-            
-            var params = ['class', 'id', 'title'], attr;
-            
-            $.each(params, function(index, value) {
-	            
-	            attr = $(element).attr(value);
-	            
-	            if (typeof attr !== 'undefined') {
-		            
-		            if (value == 'class') {
-			            img.className = attr;
-			        }
-			        else {
-		            	img[value] = attr;
-		            }
-		            
-		        }
-		        
-		    });
-		    
-            $(element).replaceWith(img);
-            
-        });
-        
-    }
-    
-})();
-
-HTML
-		];
-	
 	}
+	
+	// Check if we need to reload TB's templates
+	$personal_cache = $cache->read('shade_plugins');
+	
+	if ($personal_cache['ThunderBoard']['templates_last_updated'] > $mybb->cookies['tb-templates']) {
+		my_unsetcookie('tb-templates');
+	}
+			
+	require_once MYBB_ROOT . 'min/static/lib.php';
 	
 	$minifiedGlobalStylesheets = $minifiedSpecificStylesheets = '';
-	
-	// Versioning
-	$forumVersion = "1.2";
-	
-	// Process stylesheets
-	global $theme;
-	
-	$i = 0;
-	$stylesheets = $doc->getElementsByTagName('link');
-	
-	for ($i = $stylesheets->length; $i > 0; $i--) {
 		
-		$css = $doc->getElementsByTagName('link')->item($i - 1);
+	// Minify stylesheets
+	if ($minifyResources['stylesheets'] and !in_array($mybb->user['uid'], $protected)) {
 		
-		$rel = $css->getAttribute('rel');
-		$src = $css->getAttribute('href');
-		
-		// Do not continue if:
-		// 1) the object is not a stylesheet
-		// 2) this resource does not match this site's origin (fixes @Senpai's issue)
-		if ($rel != 'stylesheet' or strpos($src, $mybb->settings['bburl']) === false) continue;
-		
-		// Add the stylesheet to our minification array
-		if ($src) {
-			
-			$plainLink = str_replace($mybb->settings['bburl'] . '/', '', strtok($src, '?'));
-			
-			$specific = false;
-			
-			// Check if this stylesheet is a child of 'body', if it is, we assume it's page-specific since
-			// MyBB loads global stylesheets in the head
-			if (strpos($css->getNodePath(), '/html/body') !== false) {
-				$specific = true;
-			}
-			
-			if (!$specific) {
-			
-				// Check if this stylesheet is a global one or not. If it's specific, we're going to add it
-				// to the body instead of the head. Then, our custom handler will append them to the head, checking
-				// if the stylesheet is already available
-				foreach (['global', $mybb->get_input('action')] as $pageAction) {
-					
-					foreach ((array) $theme['stylesheets'][basename($_SERVER['PHP_SELF'])][$pageAction] as $pageSpecificStylesheet) {
-						
-						if ($pageSpecificStylesheet == $plainLink) {
-							$specific = true;
-						}
-					
-					}
-					
-				}
+		if ($mybb->settings['thunderboard_merge_stylesheets']) {
 				
-			}
+			$minifiedGlobalStylesheets = '<link rel="stylesheet" type="text/css" href="' . $mybb->settings['bburl'] . Minify\StaticService\build_uri('/min/static', 'f=' . implode(',', array_unique($thunderboard->stylesheets['global'])), 'css') . '" />';
 			
-			if ($specific) {
-				$specificStylesheets[] = $plainLink;
-			}
-			else {
-				$globalStylesheets[] = $plainLink;
+			if ($thunderboard->stylesheets['specific']) {
+				$minifiedSpecificStylesheets = '<link rel="stylesheet" type="text/css" href="' . $mybb->settings['bburl'] . Minify\StaticService\build_uri('/min/static', 'f=' . implode(',', array_unique($thunderboard->stylesheets['specific'])), 'css') . '" />';
 			}
 			
 		}
 		
-		// Remove the stylesheet
-		$css->parentNode->removeChild($css);
-		
 	}
-	
-	// Restore the original ordering
-	$globalStylesheets = array_reverse($globalStylesheets);
-	
-	if ($specificStylesheets) {
-		$specificStylesheets = array_reverse($specificStylesheets);
-	}
-		
-	//if (!$shade) {
-		
-		// Minify stylesheets
-		if ($mybb->settings['thunderboard_use_minifier']) {
-			
-			$minifiedGlobalStylesheets = '<link rel="stylesheet" type="text/css" href="min/?f=' . implode(',', array_unique($globalStylesheets)) . '&v=' . $forumVersion . '" />';
-			
-			if ($specificStylesheets) {
-				$minifiedSpecificStylesheets = '<link rel="stylesheet" type="text/css" href="min/?f=' . implode(',', array_unique($specificStylesheets)) . '&v=' . $forumVersion . '" />';
-			}
-			
-		}
-		
-	/*}
 	else {
 		
-		*/
-		foreach ($globalStylesheets as $css) {
-			$minifiedGlobalStylesheets .= "<link rel='stylesheet' type='text/css' href='{$css}?v={$forumVersion}' />\n";
+		foreach ($thunderboard->stylesheets['global'] as $css) {
+			$minifiedGlobalStylesheets .= "<link rel='stylesheet' type='text/css' href='{$css}' />\n";
 		}
 		
-		if ($specificStylesheets) {
+		if ($thunderboard->stylesheets['specific']) {
 			
-			foreach ($specificStylesheets as $css) {
-				$minifiedSpecificStylesheets .= "<link rel='stylesheet' type='text/css' href='{$css}?v={$forumVersion}' />\n";
+			foreach ($thunderboard->stylesheets['specific'] as $css) {
+				$minifiedSpecificStylesheets .= "<link rel='stylesheet' type='text/css' href='{$css}' />\n";
 			}
 			
 		}
 		
-	//}
-	
-	// Advanced experimental: move variables with global scope to the top
-	if ($globalScopedVariables) {
-		$scripts = array_merge([0 => ['inline' => str_replace('var ', '', implode("\n", (array) $globalScopedVariables))]], $scripts);
 	}
 	
 	// Add eventual scripts to reload
 	if ($mybb->settings['thunderboard_use_pjax']) {
 		
-		if ($scripts_to_reload and $turbo->isPjax()) {
+		if ($thunderboard->scripts['reload'] and $dynamic) {
+			$thunderboard->load_scripts([implode(PHP_EOL, $thunderboard->scripts['reload'])], 'inline', false);
+		}
+		
+	}
 			
-			$base = [];
+	// Convert refresh metas into JS based refreshes
+	if ($thunderboard->metas) {
+		
+		foreach ($thunderboard->metas as $meta) {
 			
-			foreach ($scripts_to_reload as $function => $script) {
-				
-				$exec = (is_numeric($function)) ? $script : $function;
-				
-				$base[] = "{$exec}.init();";
-				
-			}
+			$pieces = explode(';', $meta);
 			
-			$scripts[] = [
-				'inline' => implode("\n", $base)
-			];
+			$time = (int) $pieces[0] * 1000;
+			$url = trim(str_ireplace('url=', '', $pieces[1]));
+			
+			$url = (strpos($url, $mybb->settings['bburl']) === false) ? $mybb->settings['bburl'] . '/' . $url : $url;
+			
+			$thunderboard->load_scripts([
+				<<<HTML
+	
+	// Loading it into ThunderBoard's object, will be cleared when changing page to ensure the page doesn't keep on
+	// refreshing even if the page has changed
+	ThunderBoard.reloadTimeout = setTimeout(function() {
+		
+		// Append a dummy element
+		$('body').append('<a href="$url" id="thunderboard-reload"></a>');
+		
+		// Simulate a click to trigger a PJAX refresh
+		$('#thunderboard-reload').click();
+		
+	}, $time);
+				
+HTML
+			], 'inline');
 			
 		}
 		
 	}
 	
 	// Add scripts to LAB.js to load them asynchronously
-	$labscripts = '$LAB';
-	foreach ($scripts as $script) {
+	$labscripts = '$LAB.setOptions({AlwaysPreserveOrder:true, AllowDuplicates:true})';
+	
+	foreach ($thunderboard->scripts as $script) {
 		
 		if ($script['external']) {
 			
-			$check_string = md5($script['external']);
-			
-			$versioning = '&v=' . $forumVersion;
-			
-			if (strpos($script['external'], $mybb->settings['bburl']) === false) {
-				$versioning = '';
+			if ($minifyResources['scripts'] and strpos($script['external'], 'http') === false) {
+				$uri = $mybb->settings['bburl'] . Minify\StaticService\build_uri('/min/static', 'f=' . $script['external'], 'js');
 			}
-	
-			// Add the minification prefix to this script
-			$prefix = ($mybb->settings['thunderboard_use_minifier'] and strpos($script['external'], 'http') === false) ? $mybb->settings['bburl'] . '/min/?f=' : '';
+			else {
+				$uri = $mybb->settings['bburl'] . $script['external'];
+			}
 			
-			$labscripts .= '.script(function() {
-
-if (window.thunderboard_loaded.indexOf(\'' . $check_string . '\') == -1) {
-
-	window.thunderboard_loaded.push(\'' . $check_string . '\');
+			// If this script needs reloading, delete it from our cache and from the DOM
+			$reload_extra = (!$script['reload']) ? '' : "
+	var index = thunderboard_loaded.indexOf('{$uri}');
+	if (index > -1) thunderboard_loaded.splice(index, 1);
 	
-	return \'' . $prefix . $script['external'] . $versioning . '\';
+	var elem = document.querySelector(\"script[src*='{$uri}']\");
+	if (elem) elem.remove();
+";
+				
+			$labscripts .= ".script(() => {{$reload_extra}
+	if (thunderboard_loaded.indexOf('{$uri}') == -1) {
+		thunderboard_loaded.push('{$uri}');
+		return '{$uri}';
+	}
+})";
 	
-}
-
-}).wait()';
-
 		}
 		else if ($script['inline']) {
-			$labscripts .= '.wait(function() {' . $script['inline'] . '})';
+			$labscripts .= ".wait(() => {\n" . $script['inline'] . "\n})";
 		}
-		
+
 	}
 	
 	$labscripts .= ';';
-		
-	// Minify scripts
-	if ($mybb->settings['thunderboard_use_minifier']) {
-		
-		require_once MYBB_ROOT . 'min/lib/JSMin.php';
-		
-		try {
-			$lab_script = JSMin::minify($labscripts);
-		}
-		catch (Exception $e) {
-			$lab_script = $labscripts;
-		}
-		
-	}
+	$LABMain = !$dynamic ? '<script type="text/javascript" src="jscripts/LAB.min.js"></script>' : '';
 	
 	$labjs = <<<HTML
-<script type="text/javascript" src="jscripts/LAB.min.js"></script>
-<script type="text/javascript">$lab_script</script>
+$LABMain
+<script type="text/javascript" data-tb-loader>
+
+if (typeof thunderboard_loaded === 'undefined') {
+	thunderboard_loaded = [];
+}
+
+$labscripts</script>
 HTML;
 
+	$enclose = [];
+	
+	if ($mybb->settings['thunderboard_use_pjax'] && !$dynamic) {
+		$enclose['start'] = '<div id="thunderboard-container">';
+		$enclose['end']   = '</div>';
+	}
+
 	// Finally...
-	$contents = str_replace(['<body>', '</head>'], ['<body>' . $minifiedSpecificStylesheets . $labjs, $minifiedGlobalStylesheets . '</head>'], $doc->saveHTML());
+	$contents = str_replace(['<body>', '</head>', '</body>'], ['<body>' . $enclose['start'] . $minifiedSpecificStylesheets . $labjs, $minifiedGlobalStylesheets . '</head>', $enclose['end'] . '</body>'], $thunderboard->dom->saveHTML());
 	
 	// Enable PJAX for valid requests
 	if ($mybb->settings['thunderboard_use_pjax']) {
 		
-		if ($turbo->isPjax()) {
+		if ($dynamic) {
+			
+			$hash = ($mybb->input['pid']) ? '#pid' . (int) $mybb->input['pid'] : '';
 			
 			// Fix for header: location manipulations
-			header("X-PJAX-URL: http" . (isset($_SERVER['HTTPS']) ? 's' : '') . '://' . "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}");
+			header("X-PJAX-URL: http" . (isset($_SERVER['HTTPS']) ? 's' : '') . '://' . "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}{$hash}");
 			
-			return $turbo->extract($contents);
+			return $thunderboard->extract($contents);
 			
 		}
 		
@@ -807,54 +566,62 @@ HTML;
 	
 }
 
-$GLOBALS['settingsToReplace'] = [
-	"usergroups_allowed" => "users",
-];
-
-function thunderboard_settings_saver()
+function thunderboard_admin_config_menu($sub_menu)
 {
-	global $mybb, $page, $settingsToReplace;
-
-	if ($mybb->request_method == "post" and $mybb->input['upsetting'] and $page->active_action == "settings") {
-		
-		foreach($settingsToReplace as $setting => $option) {
-			
-			if (isset($mybb->input['upsetting']['thunderboard_'.$setting]) and !is_array($mybb->input['thunderboard_'.$setting.'_select'])) {
-				$mybb->input['upsetting']['thunderboard_'.$setting] = '';
-			}
-			else if (is_array($mybb->input['thunderboard_'.$setting.'_select'])) {
-				$mybb->input['upsetting']['thunderboard_'.$setting] = implode(",", $mybb->input['thunderboard_'.$setting.'_select']);
-			}
-			
-		}
-		
+	global $lang;
+	
+	if (!$lang->thunderboard) {
+		$lang->load('thunderboard');
 	}
+	
+	$sub_menu[] = [
+		"id" => "thunderboard",
+		"title" => $lang->thunderboard,
+		"link" => "index.php?module=config-thunderboard"
+	];
+	
+	return $sub_menu;
 }
 
-function thunderboard_settings_replacer($args)
+function thunderboard_admin_config_action_handler($actions)
 {
-	global $form, $lang, $mybb, $page, $settingsToReplace;
-
-	if ($page->active_action != "settings" and $mybb->input['action'] != "change") {
-		return false;
-	}
-
-	$lang->load('thunderboard');
+	$actions['thunderboard'] = [
+		"active" => "thunderboard",
+		"file" => "thunderboard.php"
+	];
 	
-	foreach($settingsToReplace as $setting => $option) {
-		
-		if ($args['row_options']['id'] == "row_setting_thunderboard_".$setting) {
-			
-			preg_match("/value=\"[^A-Za-z]{1,}\"/", $args['content'], $values);
-			$values = explode(",", str_replace(["value", "\"", "="], "", $values[0]));
-	
-			
-			if ($option == 'users') {
-				$args['content'] = $form->generate_group_select("thunderboard_".$setting."_select[]", $values, ["multiple" => true, "size" => "5"]);
+	return $actions;
+}
+
+// ZiNgA BuRgA's control_object
+if(!function_exists('control_object')) {
+	function control_object(&$obj, $code) {
+		static $cnt = 0;
+		$newname = '_objcont_'.(++$cnt);
+		$objserial = serialize($obj);
+		$classname = get_class($obj);
+		$checkstr = 'O:'.strlen($classname).':"'.$classname.'":';
+		$checkstr_len = strlen($checkstr);
+		if(substr($objserial, 0, $checkstr_len) == $checkstr) {
+			$vars = array();
+			// grab resources/object etc, stripping scope info from keys
+			foreach((array)$obj as $k => $v) {
+				if($p = strrpos($k, "\0"))
+					$k = substr($k, $p+1);
+				$vars[$k] = $v;
 			}
-			else if ($option == 'forums') {
-				$args['content'] = $form->generate_forum_select("thunderboard_".$setting."_select[]", $values, ["multiple" => true, "size" => "10"]);				
-			}
+			if(!empty($vars))
+				$code .= '
+					function ___setvars(&$a) {
+						foreach($a as $k => &$v)
+							$this->$k = $v;
+					}
+				';
+			eval('class '.$newname.' extends '.$classname.' {'.$code.'}');
+			$obj = unserialize('O:'.strlen($newname).':"'.$newname.'":'.substr($objserial, $checkstr_len));
+			if(!empty($vars))
+				$obj->___setvars($vars);
 		}
+		// else not a valid object or PHP serialize has changed
 	}
 }
