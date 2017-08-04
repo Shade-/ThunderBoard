@@ -72,11 +72,11 @@ else if ($mybb->input['action'] == 'reload') {
 	
 	if ($mybb->request_method == 'post') {
 		
-		$rules = (array) explode(PHP_EOL, $mybb->input['rules']);
+		$_rules = (array) explode(PHP_EOL, $mybb->input['rules']);
 		
 		$scripts = [];
 		
-		foreach ($rules as $rule) {
+		foreach ($_rules as $rule) {
 			
 			list($file, $function) = explode('=', $rule);
 			

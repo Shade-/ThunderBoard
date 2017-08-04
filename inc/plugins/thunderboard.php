@@ -172,7 +172,7 @@ if (defined("IN_ADMINCP")) {
 
 function thunderboard_update()
 {
-	global $mybb, $cache, $lang, $reload_rules;
+	global $mybb, $cache, $lang, $reload_rules, $db;
 	
 	$lang->load('thunderboard');
 	
@@ -198,8 +198,8 @@ function thunderboard_update()
 			
 			$PL->cache_update('thunderboard_reload_scripts', $reload_rules);
 			
-			$drop_settings[] = 'thunderboard_automatic_variable_cleanup';
-			$drop_settings[] = 'thunderboard_versioning';
+			$drop_settings[] = 'automatic_variable_cleanup';
+			$drop_settings[] = 'versioning';
 			
 		}
 		
@@ -213,12 +213,13 @@ function thunderboard_update()
 		
 		rebuild_settings();
 		
+		flash_message($lang->sprintf($lang->thunderboard_success_updated, $shade_plugins[$info['name']]['version'], $info['version']), "success");
+		
 		$shade_plugins[$info['name']]['version'] = $info['version'];
 		
 		$cache->update('shade_plugins', $shade_plugins);
 		
-		flash_message($lang->sprintf($lang->thunderboard_success_updated, $shade_plugins[$info['name']]['version'], $info['version']), "success");
-		admin_redirect($_SERVER['HTTP_REFERER']);
+		admin_redirect('index.php?module=config-thunderboard');
 		
 	}
 }
