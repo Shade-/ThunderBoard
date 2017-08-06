@@ -84,8 +84,11 @@ class ThunderBoard
 					
 				}
 				
+				// Don't strip out the querystring if this script is external
+				$src = (strpos($src, 'www') === false) ? strtok($src, '?') : $src;
+				
 				// Add this script to our list
-				$this->scripts[$this->counter]['external'] = str_replace($mybb->settings['bburl'] . '/', '', strtok($src, '?'));
+				$this->scripts[$this->counter]['external'] = str_replace($mybb->settings['bburl'] . '/', '', $src);
 				
 			}
 			
