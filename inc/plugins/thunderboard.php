@@ -493,11 +493,11 @@ HTML
 		
 		if ($script['external']) {
 			
-			if ($minifyResources['scripts'] and strpos($script['external'], 'http') === false) {
+			if ($minifyResources['scripts'] and strpos($script['external'], 'www') === false) {
 				$uri = $mybb->settings['bburl'] . Minify\StaticService\build_uri('/min/static', 'f=' . $script['external'], 'js');
 			}
 			else {
-				$uri = $mybb->settings['bburl'] . $script['external'];
+				$uri = $script['external'];
 			}
 			
 			// If this script needs reloading, delete it from our cache and from the DOM
