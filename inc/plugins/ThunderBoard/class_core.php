@@ -35,7 +35,7 @@ class ThunderBoard
 		// Convert <if>, <else> and closures to their HTML entities equivalents.
 		// This is to prevent DOMDocument to strip out invalid tags. Also, strip out HTML comments in script,
 		// to prevent DOMDocument to return wrong values
-		$temp = preg_replace('#(<script[^<]*?)<!--#is', '$1', str_replace(['<if', '<else>', '<else', '</if>'], ['&lt;if', '&lt;else&gt;', '&lt;else', '&lt;/if&gt;'], $content));
+		$temp = preg_replace('#(<script[^<]*?)<!--#is', '$1', str_replace(['<if ', '<else>', '<else', '</if>'], ['&lt;if ', '&lt;else&gt;', '&lt;else', '&lt;/if&gt;'], $content));
 	
 		$this->dom->loadHTML($temp, LIBXML_HTML_NOIMPLIED);
 		
