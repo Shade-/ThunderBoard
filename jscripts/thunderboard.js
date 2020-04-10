@@ -2,16 +2,30 @@ var ThunderBoard = {
 
 	templates: null,
 	timeout: 4000,
-	listenersInit: {},
-	component: '',
 	selector: '#thunderboard-container',
+	location: null,
+	errors: {
+		threshold: 10,
+		counter: 0
+	},
+	isLoading: false,
+	customAttributes: {
+		outAnimations: [],
+		inAnimations: [],
+		reverseAnimation: ''
+	},
 
 	init: function() {
 
-		var localTemplates = Cookie.get('tb-templates');
+		if (!Turbolinks.supported) {
+			return false;
+		}
+
+		var cached = Cookie.get('tb-templates');
+		var $doc = $(document);
 
 		// Load templates from the local cache to save server resources
-		if (localTemplates && typeof Storage !== 'undefined') {
+		if (cached && typeof Storage !== 'undefined') {
 			this.templates = this.storage.getTemplates();
 		}
 
@@ -29,7 +43,6 @@ var ThunderBoard = {
 						return console.log(data.error);
 					}
 
-					ThunderBoard.templates = data;
 					ThunderBoard.storage.saveTemplates(data);
 
 				}
@@ -40,322 +53,284 @@ var ThunderBoard = {
 		var container = $(this.selector);
 
 		// Handle preloading pages
-		if (!this.listenersInit.send) {
+		var headerHeight = $('#header').outerHeight();
+		var footerHeight = $('#footer').outerHeight();
 
-			this.listenersInit.send = true;
+		var search = function (nameKey, myArray) {
 
-			var headerHeight = $('#header').outerHeight();
-			var footerHeight = $('#footer').outerHeight();
+			var matchAgainst = '';
 
-			container.on('pjax:send', function(e) {
+			for (var i = 0; i < myArray.length; i++) {
 
-				function search(nameKey, myArray) {
+				var page = String(myArray[i].page);
 
-					var matchAgainst = '';
+				matchAgainst = (page.indexOf(',') !== -1) ? page.split(',') : [page];
 
-					for (var i = 0; i < myArray.length; i++) {
+				for (var o = 0; o < matchAgainst.length; o++) {
 
-						var page = String(myArray[i].page);
+					if (nameKey.indexOf(matchAgainst[o]) !== -1) {
+						return myArray[i].template;
+					}
 
-						matchAgainst = (page.indexOf(',') !== -1) ? page.split(',') : [page];
+				}
 
-						for (var o = 0; o < matchAgainst.length; o++) {
+			}
 
-							if (nameKey.indexOf(matchAgainst[o]) !== -1) {
-								return myArray[i].template;
-							}
+			return '';
 
+		}
+
+		// Replace page before loading
+		var showPreviewTemplate = function(event) {
+
+			var template = '';
+
+			if (event.originalEvent.data.url && ThunderBoard.templates) {
+				template = search(event.originalEvent.data.url, ThunderBoard.templates);
+			}
+
+			if (!template) {
+				template = search('global', ThunderBoard.templates);
+			}
+
+			if (template) {
+
+				// Replace eventual dynamic content found
+				var regex = /\{(.*?)\}/g,
+					replacement,
+					breakdown,
+					dataTitle,
+					attribute,
+					component,
+					same, elem;
+
+				while (match = regex.exec(template)) {
+
+					breakdown = match[1].split('|');
+					dataTitle = breakdown[0].replace(/[^a-zA-Z0-9]/g, '');
+					attribute = breakdown[1];
+					component = ThunderBoard.component;
+					same = '';
+					elem = '';
+
+					// Search the closest item we find traversing up to the highest tb-item defined
+					while (!elem.length) {
+
+						same = component;
+
+						component = (typeof component !== 'undefined') ? component.parent().closest('*[data-tb-item]') : '';
+
+						if (!component.length) {
+							break;
+						}
+
+						elem = component.find('*[data-tb-' + dataTitle + '], ' + breakdown[0]).first();
+
+						if (component.is(same)) {
+							break;
 						}
 
 					}
 
-					return '';
+					if (elem.length) {
 
-				}
-
-				var template = '';
-
-				if (ThunderBoard.component.attr('href') && ThunderBoard.templates) {
-					template = search(ThunderBoard.component.attr('href'), ThunderBoard.templates);
-				}
-
-				if (template) {
-
-					// Replace eventual dynamic content found
-					var regex = /\{(.*?)\}/g;
-					var replacement = '';
-					var breakdown = '';
-					var tbData = '';
-					var component = '';
-
-					while (match = regex.exec(template)) {
-
-						breakdown = match[1].split('|');
-						tbData = breakdown[0].replace(/[^a-zA-Z0-9]/g, '');
-						component = ThunderBoard.component;
-						var same = '';
-						var elem = '';
-
-						// Search the closest item we find traversing up to the highest tb-item defined
-						while (!elem.length) {
-
-							same = component;
-
-							component = component.parent().closest('*[data-tb-item]');
-
-							if (!component.length) {
-								break;
-							}
-
-							elem = component.find('*[data-tb-' + tbData + '], ' + breakdown[0]).first();
-
-							if (component.is(same)) {
-								break;
-							}
-
-						}
-
-						if (elem.length) {
-
-							// Does this variable has an attribute we've got to get instead of the pure html?
-							if (breakdown[1]) {
-								replacement = elem.attr(breakdown[1]);
-							} else {
-								replacement = elem.html();
-							}
-
+						// Does this variable has an attribute we've got to get instead of the pure html?
+						if (attribute) {
+							replacement = elem.attr(attribute);
 						} else {
-							replacement = '';
+							replacement = elem.html();
 						}
 
-						if (tbData == 'subject' && !replacement) {
-							replacement = ThunderBoard.component.text();
-						}
+					} else {
+						replacement = '';
+					}
 
-						template = template.replace(match[0], replacement);
+					if (dataTitle == 'subject' && !replacement) {
+						replacement = ThunderBoard.component.text();
+					}
 
-						// Delete the placeholder reference if it has been replaced
-						if (replacement) {
+					template = template.replace(match[0], replacement);
 
-							var temp = $(template).clone().wrap('<div>')
-								.find('*[data-tb-' + tbData + '], ' + breakdown[0]).first()
-								.closest('.placeholder').removeClass('placeholder').removeAttr('style') // Clear closest
-								.find('.placeholder').removeClass('placeholder').removeAttr('style').end() // Clear childrens
-								.end().end().end()
-								.parent().html();
+					// Delete the placeholder reference if it has been replaced
+					if (replacement) {
 
-							if (temp) {
-								template = temp;
-							}
+						var temp = $(template).clone().wrap('<div>')
+							.find('*[data-tb-' + dataTitle + '], ' + breakdown[0]).first()
+							.closest('.placeholder').removeClass('placeholder').removeAttr('style') // Clear closest
+							.find('.placeholder').removeClass('placeholder').removeAttr('style').end() // Clear children
+							.end().end().end()
+							.parent().html();
 
+						if (temp) {
+							template = temp;
 						}
 
 					}
 
-					$('*[data-thunderboard]')[0].innerHTML = template;
-
-					// Set full height
-					$('#content').css({
-						'min-height': ($(window).height() - headerHeight - footerHeight) + 'px'
-					});
-
 				}
 
-				// Delete off-scope elements
-				$('body > *:not(#thunderboard-container):not(.loading-app)').remove();
+				$('[data-thunderboard]:last')[0].innerHTML = template;
 
-				// Start the loading bar
-				appLoading.start();
+				// Set full height
+				$('#content').css({
+					'min-height': ($(window).height() - headerHeight - footerHeight) + 'px'
+				});
 
-			});
+			}
 
-		}
-
-		// Handle end of loading bar
-		if (!this.listenersInit.end) {
-
-			this.listenersInit.end = true;
-
-			container.on('pjax:end', function(options, xhr) {
-
-				// Fixes overflow:hidden added by modals which makes the page unscrollable
-				$('body').removeAttr('style');
-
-				// The bar is saved within the old HTML, so when browsing back and forth without accessing the cache,
-				// it shows up regardless. This fixes the issue by targetting and deleting the bar immediately
-				if (xhr === null) {
-					return $('.loading-app').remove();
-				}
-				// Stop the loading bar
-				else {
-					return appLoading.stop();
-				}
-
-			});
-
-		}
-
-		// Handle errors as if they were a normal page
-		if (!this.listenersInit.error) {
-
-			this.listenersInit.error = true;
-
-			container.on('pjax:error', function(event, xhr, textStatus, errorThrown, options) {
-				options.success(xhr.responseText, textStatus, xhr);
-				return false;
-			});
-
-		}
+		};
 
 		// Handle main operations
-		if (!this.listenersInit.start) {
+		// Errors – reload failing scripts
+		window.onerror = function (msg, url, lineNo, columnNo, error) {
+			if (error instanceof ReferenceError) {
 
-			this.listenersInit.start = true;
+				if (ThunderBoard.errors.counter >= ThunderBoard.errors.threshold) {
+					window.location.reload();
+				}
 
-			// AJAXify the whole site
-			if ($.support.pjax) {
+				var variable = /referenceerror:(.*?)is not defined/gi.exec(msg);
+				variable = variable[1].trim();
 
-				var $doc = $(document);
+				// Set up a check for the variable until its loaded
+				var parachute = setInterval(function(variable) {
 
-				$doc.on('click', 'a:not([data-skip]):not([href*="attachment.php"])', function(event) {
+					if (typeof window[variable] === 'undefined') return false;
 
-					var $this = $(this);
+					// Append script (evaluating it)
+					$('script:contains(' + variable + ')').appendTo('body');
 
-					if (ThunderBoard.reloadTimeout) {
-						clearTimeout(ThunderBoard.reloadTimeout);
-					}
+					// Dispatch turbolinks' load event to take care of eventual initializers
+					document.dispatchEvent(new Event('turbolinks:load'));
 
-					ThunderBoard.component = $this;
+					ThunderBoard.errors.counter++;
 
-					$.pjax.click(event, {
-						timeout: ThunderBoard.timeout,
-						container: ThunderBoard.selector,
-						// Create a custom replace handler to accomodate eventual page-specific stylesheets
-						replacementHandler: function(context, content, options, url) {
+					// Clear interval
+					return clearInterval(parachute);
 
-							var stylesheets = [];
-							var indexes = [];
+				}, 200, variable);
 
-							// Gather the stylesheets on the new page
-							$.each(content, function(k, v)  {
+				return true;
 
-								if (v.rel == 'stylesheet') {
+			}
 
-									if ($('head').find('link[rel*="style"][href="' + v.href + '"]').length == 0) {
-										stylesheets.push($('<link rel="stylesheet" type="text/css" href="' + v.href + '" />'));
-									}
+			return false;
+		}
 
-									indexes.push(k);
+		ThunderBoard.location = window.location.pathname;
 
-								}
+		// Override Turbolinks to recognize relative .php files
+		Turbolinks.Location.prototype.isHTML = function() {
+			var extension = this.getExtension();
+			return extension == null ||
+					extension === ".html" ||
+					extension.match(/^(?:|\.(?:htm|html|xhtml|php))$/);
+		}
 
+		Turbolinks.setProgressBarDelay(1000000);
+
+		var outAnimations = ThunderBoard.customAttributes.outAnimations;
+		var inAnimations = ThunderBoard.customAttributes.inAnimations;
+
+		// Page out animations
+		$doc.on('turbolinks:click', function(event) {
+
+    		// Disable for different-page navigation
+    		if (new URL(event.originalEvent.data.url).pathname != ThunderBoard.location) {
+        		return false;
+    		}
+
+			ThunderBoard.isLoading = true;
+
+			// Delete off-scope elements
+			$('body > *:not([data-thunderboard-context])').remove();
+
+			var items = $('[tb-animation]');
+			var length = items.length;
+
+			$.each(items, function(k, item) {
+
+				item = $(item);
+				var animations = item.attr('tb-animation').split(',');
+				if (!animations[1]) {
+					animations[1] = animations[0];
+				}
+
+				item.addClass(animations[1] + ' ' + ThunderBoard.customAttributes.reverseAnimation)
+					.off('webkitAnimationEnd oanimationend msAnimationEnd animationend');
+
+				// Show preview template once the last item has finished
+				if (k == (length - 1)) {
+					setTimeout(function() {
+						return (!ThunderBoard.isLoading) ? false : showPreviewTemplate(event);
+					}, 500, event);
+				}
+
+			});
+
+			// Fallback if no animated items
+			if (!length) {
+				showPreviewTemplate(event);
+			}
+
+		});
+
+		// Page in animations
+		$doc.on('turbolinks:load', function(event) {
+
+			ThunderBoard.isLoading = false;
+
+		    // If call was fired by TurboLinks
+			if (typeof event.originalEvent.data !== 'undefined'
+				&& typeof event.originalEvent.data.timing.visitStart !== 'undefined'
+				&& ThunderBoard.location != window.location.href) {
+
+				$.each($('[tb-animation]'), function(k, item) {
+
+					item = $(item);
+					var animations = item.attr('tb-animation').split(',');
+					item.addClass(animations[0])
+						.one('webkitAnimationEnd oanimationend msAnimationEnd animationend', function() {
+							$(this).removeClass(function (index, className) {
+								return (className.match(/(^|\s)uk-animation-\S+/g) || []).join(' ');
 							});
-
-							// Remove all the stylesheets from the body (in reverse order, because otherwise we are
-							// removing other nodes)
-							if (indexes.length) {
-
-								var i = indexes.length;
-
-								while (i--) {
-									content.splice(indexes[i], 1);
-								}
-
-							}
-
-							var finishFlag = false;
-
-							if (stylesheets.length) {
-
-								// Append them at once
-								$('head').append(stylesheets);
-
-								var counter = stylesheets.length;
-
-								// Add a "load" handler to all of them
-								$.each(stylesheets, function(k, v) {
-
-									v.one('load', function() {
-
-										counter--;
-
-										// If there are no more stylesheets remaining, replace the html
-										if (counter == 0) {
-											finishFlag = context.html(content);
-										}
-
-									});
-
-								});
-
-							} else {
-								finishFlag = context.html(content);
-							}
-
-							var scrollTo = options.scrollTo;
-
-							// Ensure browser scrolls to the element referenced by the URL anchor
-							if (url.hash) {
-
-								var name = decodeURIComponent(url.hash.slice(1));
-
-								var anchorInterval = setInterval(function() {
-
-									// Ensure the function has finished
-									if (finishFlag === false) {
-										return false;
-									}
-
-									// Check if the target is in place, and if it is, get its offset
-									var target = $('#' + name);
-
-									if (target.length) {
-										scrollTo = target.offset().top;
-									}
-
-									if (typeof scrollTo == 'number') {
-										
-										scrollTo -= (scrollTo > 0) ? 90 : 0;
-
-										// Finally scroll to the element, using smooth scroll
-										$('html, body').animate({
-											scrollTop: scrollTo
-										}, 300);
-
-									}
-
-									return clearInterval(anchorInterval);
-
-								}, 100); // 100ms should be enough. This function will loop until the document has been replaced
-
-							} else if (typeof scrollTo == 'number') {
-								$('html, body').animate({
-									scrollTop: scrollTo
-								}, 300);
-							}
-
-						}
-					});
+						});
 
 				});
 
 			}
 
-			// AJAXify forms
-			$doc.on('submit', 'form:not([data-skip])', function(event) {
+			ThunderBoard.location = window.location.pathname;
 
-				ThunderBoard.component = $(this);
+		});
 
-				return $.pjax.submit(event, ThunderBoard.selector);
+/*
+		$doc.on('turbolinks:before-render', function(event) {
 
-			});
+			ThunderBoard.scrollPosition = $('[data-thunderboard]:last')[0].getBoundingClientRect().top;
 
-			// Add hidden inputs to forms upon submitting
-			$doc.on('click', 'form:not([data-skip]) input[type="submit"]', function(event) {
-				return $(this).closest('form').append($(this).clone().attr('type', 'hidden'));
-			});
+		});
 
-		}
+		// Restore scrollTop
+		$doc.on('turbolinks:render', function(event) {
+
+    		ThunderBoard.isLoading = false;
+
+    		$('body, html').scrollTop($('[data-thunderboard]:last').offset().top - ThunderBoard.scrollPosition);
+
+		});
+*/
+
+		// Handle get forms
+		$doc.on('submit', 'form[method="get"]', function(e) {
+
+			e.preventDefault();
+			e.stopImmediatePropagation();
+
+			var form = $(this);
+			Turbolinks.visit(form.attr("action") + '?' + form.serialize());
+
+		});
 
 	},
 
@@ -369,7 +344,7 @@ var ThunderBoard = {
 			try {
 				obj = JSON.parse(obj);
 			} catch (e) {
-				obj = {};
+				obj = null;
 			}
 
 			return obj;
@@ -380,10 +355,13 @@ var ThunderBoard = {
 
 			localStorage.thunderboardTemplates = JSON.stringify(obj);
 
+			ThunderBoard.templates = obj;
+
 			return Cookie.set('tb-templates', new Date().getTime() / 1000);
 
 		}
 
-	}
+	},
 
 };
+ThunderBoard.init();

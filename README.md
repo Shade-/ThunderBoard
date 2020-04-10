@@ -1,5 +1,5 @@
 ## ThunderBoard
 
-ThunderBoard is a plugin currently in development stages which aims to dramatically speed up page loads on MyBB forums. It uses a combination of projects to reduce pages loading time, save bandwidth and provide a catchy navigation experience.
+ThunderBoard is a plugin currently in development stages which aims to speed up same-page loads on MyBB forums.
 
-For more informations, read [the development thread](https://www.mybboost.com/thread-beta-thunderboard-beta-4).
+For more informations, read [the development thread](https://www.mybboost.com/thread-beta-thunderboard-beta-6).
